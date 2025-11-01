@@ -85,7 +85,44 @@ if DEBUG.lower() == "true":
 
 USER_AGENT = "GitHubSampleWebApp/AsyncAzureOpenAI/1.0.0"
 
-
+def get_user_security_filter(request_headers):
+    """
+    Extract user's security groups and build search filter.
+    Returns filter string for Azure AI Search.
+    """
+    try:
+        authenticated_user_details = get_authenticated_user_details(request_headers)
+        
+        # Get user's group memberships from the token
+        user_groups = authenticated_user_details.get("user_groups", [])
+        
+        logging.debug(f"User groups from token: {user_groups}")
+        
+        # Define our security groups
+        OPS_GROUP = "ProjectSimplify-OPS"
+        USERS_GROUP = "ProjectSimplify-Users"
+        
+        # Check if user is in OPS group (they see everything)
+        if OPS_GROUP in user_groups:
+            logging.info(f"User is in {OPS_GROUP} - No filter applied (sees all articles)")
+            return None  # No filter = see everything
+        
+        # Check if user is in Users group (they see only non-OP articles)
+        elif USERS_GROUP in user_groups:
+            logging.info(f"User is in {USERS_GROUP} - Filtering out OP articles")
+            # Filter: exclude documents with "-OP" in the ID
+            return "not search.ismatch('-OP', 'id')"
+        
+        else:
+            # User is not in any authorized group - show nothing
+            logging.warning(f"User not in any authorized groups: {user_groups}")
+            return "search.ismatch('UNAUTHORIZED_NO_ACCESS', 'id')"  # Impossible match = no results
+            
+    except Exception as e:
+        logging.exception(f"Error getting user security filter: {e}")
+        # On error, be safe and show nothing
+        return "search.ismatch('UNAUTHORIZED_NO_ACCESS', 'id')"
+        
 # Frontend Settings via Environment Variables
 frontend_settings = {
     "auth_enabled": app_settings.base_settings.auth_enabled,
@@ -241,13 +278,27 @@ async def init_cosmosdb_client():
 def prepare_model_args(request_body, request_headers):
     request_messages = request_body.get("messages", [])
     messages = []
-    if not app_settings.datasource:
-        messages = [
-            {
-                "role": "system",
-                "content": app_settings.azure_openai.system_message
-            }
-        ]
+    if app_settings.datasource:
+                # Get the base datasource configuration
+                datasource_config = app_settings.datasource.construct_payload_configuration(
+                    request=request
+                )
+                
+                # Add security filter based on user's groups
+                security_filter = get_user_security_filter(request_headers)
+                
+                if security_filter:
+                    logging.info(f"Applying security filter: {security_filter}")
+                    # Add filter to the datasource parameters
+                    if "parameters" not in datasource_config:
+                        datasource_config["parameters"] = {}
+                    datasource_config["parameters"]["filter"] = security_filter
+                else:
+                    logging.info("No security filter applied (OPS user or no filter needed)")
+                
+                model_args["extra_body"] = {
+                    "data_sources": [datasource_config]
+                }
 
     for message in request_messages:
         if message:
