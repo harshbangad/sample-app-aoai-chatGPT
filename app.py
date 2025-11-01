@@ -92,36 +92,28 @@ def get_user_security_filter(request_headers):
     """
     try:
         authenticated_user_details = get_authenticated_user_details(request_headers)
-        
-        # Get user's group memberships from the token
         user_groups = authenticated_user_details.get("user_groups", [])
         
-        logging.debug(f"User groups from token: {user_groups}")
-        
-        # Define our security groups
-        OPS_GROUP = "ProjectSimplify-OPS"
-        USERS_GROUP = "ProjectSimplify-Users"
+        logging.info(f"User groups from token: {user_groups}")
         
         # Check if user is in OPS group (they see everything)
-        if OPS_GROUP in user_groups:
-            logging.info(f"User is in {OPS_GROUP} - No filter applied (sees all articles)")
-            return None  # No filter = see everything
+        if "ProjectSimplify-OPS" in user_groups:
+            logging.info("OPS user - No filter (sees all articles)")
+            return None
         
         # Check if user is in Users group (they see only non-OP articles)
-        elif USERS_GROUP in user_groups:
-            logging.info(f"User is in {USERS_GROUP} - Filtering out OP articles")
-            # Filter: exclude documents with "-OP" in the ID
-            return "not search.ismatch('-OP', 'id')"
+        elif "ProjectSimplify-Users" in user_groups:
+            logging.info("Regular user - Filtering to non-OP articles only")
+            return "security_groups/any(g: g eq 'ProjectSimplify-Users')"
         
+        # User is not in any authorized group - show nothing
         else:
-            # User is not in any authorized group - show nothing
-            logging.warning(f"User not in any authorized groups: {user_groups}")
-            return "search.ismatch('UNAUTHORIZED_NO_ACCESS', 'id')"  # Impossible match = no results
+            logging.warning(f"Unauthorized user with groups: {user_groups}")
+            return "security_groups/any(g: g eq 'UNAUTHORIZED')"
             
     except Exception as e:
-        logging.exception(f"Error getting user security filter: {e}")
-        # On error, be safe and show nothing
-        return "search.ismatch('UNAUTHORIZED_NO_ACCESS', 'id')"
+        logging.exception(f"Error in security filter: {e}")
+        return "security_groups/any(g: g eq 'UNAUTHORIZED')"
         
 # Frontend Settings via Environment Variables
 frontend_settings = {
