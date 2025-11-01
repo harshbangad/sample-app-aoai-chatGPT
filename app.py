@@ -278,27 +278,13 @@ async def init_cosmosdb_client():
 def prepare_model_args(request_body, request_headers):
     request_messages = request_body.get("messages", [])
     messages = []
-    if app_settings.datasource:
-                # Get the base datasource configuration
-                datasource_config = app_settings.datasource.construct_payload_configuration(
-                    request=request
-                )
-                
-                # Add security filter based on user's groups
-                security_filter = get_user_security_filter(request_headers)
-                
-                if security_filter:
-                    logging.info(f"Applying security filter: {security_filter}")
-                    # Add filter to the datasource parameters
-                    if "parameters" not in datasource_config:
-                        datasource_config["parameters"] = {}
-                    datasource_config["parameters"]["filter"] = security_filter
-                else:
-                    logging.info("No security filter applied (OPS user or no filter needed)")
-                
-                model_args["extra_body"] = {
-                    "data_sources": [datasource_config]
-                }
+    if not app_settings.datasource:
+        messages = [
+            {
+                "role": "system",
+                "content": app_settings.azure_openai.system_message
+            }
+        ]
 
     for message in request_messages:
         if message:
@@ -329,7 +315,7 @@ def prepare_model_args(request_body, request_headers):
     if (MS_DEFENDER_ENABLED):
         authenticated_user_details = get_authenticated_user_details(request_headers)
         application_name = app_settings.ui.title
-        user_security_context = get_msdefender_user_json(authenticated_user_details, request_headers, application_name )  # security component introduced here https://learn.microsoft.com/en-us/azure/defender-for-cloud/gain-end-user-context-ai
+        user_security_context = get_msdefender_user_json(authenticated_user_details, request_headers, application_name)
     
 
     model_args = {
@@ -347,13 +333,27 @@ def prepare_model_args(request_body, request_headers):
             if app_settings.azure_openai.function_call_azure_functions_enabled and len(azure_openai_tools) > 0:
                 model_args["tools"] = azure_openai_tools
 
+            # ✅ THIS IS THE CORRECT LOCATION FOR DATASOURCE CONFIG
             if app_settings.datasource:
+                # Get the base datasource configuration
+                datasource_config = app_settings.datasource.construct_payload_configuration(
+                    request=request
+                )
+                
+                # Add security filter based on user's groups
+                security_filter = get_user_security_filter(request_headers)
+                
+                if security_filter:
+                    logging.info(f"Applying security filter: {security_filter}")
+                    # Add filter to the datasource parameters
+                    if "parameters" not in datasource_config:
+                        datasource_config["parameters"] = {}
+                    datasource_config["parameters"]["filter"] = security_filter
+                else:
+                    logging.info("No security filter applied (OPS user or no filter needed)")
+                
                 model_args["extra_body"] = {
-                    "data_sources": [
-                        app_settings.datasource.construct_payload_configuration(
-                            request=request
-                        )
-                    ]
+                    "data_sources": [datasource_config]
                 }
 
     model_args_clean = copy.deepcopy(model_args)
@@ -392,8 +392,9 @@ def prepare_model_args(request_body, request_headers):
 
     if model_args.get("extra_body") is None:
         model_args["extra_body"] = {}
-    if user_security_context:  # security component introduced here https://learn.microsoft.com/en-us/azure/defender-for-cloud/gain-end-user-context-ai     
-                model_args["extra_body"]["user_security_context"]= user_security_context.to_dict()
+    if user_security_context:
+        model_args["extra_body"]["user_security_context"] = user_security_context.to_dict()
+    
     logging.debug(f"REQUEST BODY: {json.dumps(model_args_clean, indent=4)}")
 
     return model_args
